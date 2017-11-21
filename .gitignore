@@ -3,3 +3,5 @@ __pychache__/
 metastore_db/
 *.pyc
 *.cnf
+*output*/
+*csv

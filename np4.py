@@ -4,23 +4,27 @@
 Created on Tue Nov 14 13:03:33 2017
 
 @author: david
-TODO There is an error. Filters too much.
 """
 
 from pyspark.sql import Row
 from pyspark.sql.types import LongType, ArrayType
 from pyspark.sql.functions import array, explode, lit, col, udf
 from pyspark.sql import *
-
-
-import sys
-
 from pyspark import SparkContext, SparkConf
+
+from os import listdir
+from os.path import isfile, join
+from decimal import *
+import sys
+import re
+import math
+import json
+
 
 
 
 def parseNPFunction(path):
-    import re
+
     pattern = re.compile("[-]?\\d")
     
     numVar = 0
@@ -44,11 +48,100 @@ def parseNPFunction(path):
     numClauses = len(clauses)
     return (numVar, numClauses, clauses)
 
+"""
+    heuristicVarOrder
+    Based on a simple heuristic inference using one variable information gain measure, infers an initial estimate of order
+    of the most blocking variables. It reorders the clauses names based on that order.
+    If the order is given in varDict, it uses directly that order.
+    Outputs (clauses, varsOrdered) where clauses substitute the previous numbers, by the order assignment in varsOrdered
+    e.g. (clauses={1,4,5}, {4,7,8}) based on varsOrdered={ 0:0 , 1:7 , 2:4 , 3:3 , 4:5 , 5:8 , 6:6 , 7:2 , 8:3 }
+    is clauses({7,5,8}, {5,2,3}) Leftmost varOrdered (Lower keys) are the most blocking aka 1,2,3...
+    It modifies varDict input object if given explicitelly empty.
+
+"""
+def heuristicVarOrder(clauses, numVar, varDict={} ):
+    
+    if varDict == {}:
+        varsEntropy = []
+        file = open("log.txt","w")
+        file.write("\n clauses:" + str(clauses))
+        for newVar in range(1,numVar+1):
+            entropyVar = estimateEntropy(clauses, newVar, numVar)
+            file.write("\n vars entropy: " + str(entropyVar))
+            file.write("\n new var: " + str(newVar))
+            file.write("\n num var: " + str(numVar))
+            varsEntropy.append((newVar, entropyVar))
+        varsEntropy = sorted(varsEntropy, key=lambda varTuple: varTuple[1], reverse=True)
+        
+        file.write("vars entropy:\n"+str(varsEntropy))
+        file.close()
+        ind = 1
+        for (ordVar,_) in varsEntropy:
+            varDict[ordVar] = ind
+            ind += 1
+
+    renamedClauses = set()
+    for clause in clauses:
+        newClause = set()
+        for varI in clause:
+            if varI > 0:
+                newClause.add(varDict[varI])
+            else:
+                newClause.add(-varDict[-varI])
+        renamedClauses.add(frozenset(newClause))
+
+    return renamedClauses
+
+"""
+    estimateEntropy
+    Calculates the entropy estimate given a var and its clauses
+"""
+def estimateEntropy(clauses, varE, numVar):
+    #Probability all clauses values true (every clause random Variable is independend of each other close in this estimation)
+    entropy = 0.0#
+    file = open("logE.txt","w")
+    
+    for clause in clauses:
+        if varE in clause or (varE*-1) in clause:
+            #Probability to make true the clause, is 1- prob(making clause false out of size clause random numbers 1 to numVar)
+            #Probability match the clause
+            prob = (Decimal(1)/2) ** (len(clause)-1)
+            file.write("\n len clause:" + str(len(clause)))
+            #Probability make clause true
+            prob = Decimal(1 - prob)
+            entropyClause = math.log(Decimal(1) / prob , 2)
+            entropy += entropyClause
+            file.write("\n entropy Acc:" + str(entropy))
+        else:
+            prob = (Decimal(1)/2) ** (len(clause))
+            file.write("\n len clause:" + str(len(clause)))
+            prob = Decimal(1 - prob)
+            entropyClause = math.log(Decimal(1) / prob , 2)
+            entropy += entropyClause
+            file.write("\n entropy Acc:" + str(entropy))
+    file.close()
+
+    return entropy
 
 
 """
-    minimclause (outdated comment)
+    parseInput
+    Reads as input the output path of a previous run. Paths of the form numVars+output+currentLevel
+"""
+def parseInput(path):
+    pattern = re.compile(".*csv$")
+    data = []    
+    files = [f for f in listdir(path) if isfile(join(path, f))]
+    for fileName in files:
+        if pattern.match(fileName):
+            file = open(path + "/" + fileName, 'r')
+            for line in file:
+                data.append(long(line))     
+    return data
 
+
+"""
+    minimclause
     Reduces the number of clauses to the minimum relevant where newVar appears (rest have been already checked)
     @param clauses Array of sets. Each set is a clause of type (int, int int...)
     @param level . How many variable to check. From 1 to level + the new variable
@@ -72,6 +165,15 @@ def minimClause(clauses, level, newVariable, onlynewVariable = True):
             minClauses.add(clause)
     return minClauses
 
+"""
+    minimClauseAllVars
+    Reduces the number of clauses to the minimum relevant where clauses that will not be used
+    are not included     
+    @param clauses Array of sets. Each set is a clause of type (int, int int...)
+    @param level . How many variable to check. From 1 to level variables
+    @param onlynewVariables. if True, adds non level variables
+    Requires level < newVariable.
+"""
 def minimClauseAllVars(clauses, level, onlynewVariables = True):
     varsFilter = set(range(1,level+1))
     minClauses = set()
@@ -84,13 +186,16 @@ def minimClauseAllVars(clauses, level, onlynewVariables = True):
             else:
                 hasOneNew = True
         if isMinimum and ((not onlynewVariables) or hasOneNew):
-                minClauses.add(clause)
-                
+                minClauses.add(frozenset(clause))
+               
     return minClauses
 
 
 
-#Returns True if exist solution, False otherwise
+"""
+    checkBoolean
+    returns True if exist solution, False otherwise
+"""
 def checkBoolean(clauses, instanceSet):
     for clause in clauses:
         isSolution = False
@@ -102,13 +207,14 @@ def checkBoolean(clauses, instanceSet):
     return True
 
 """
-Calculates if this instantiation passes the closes.
-Returns status. 
--1- delete. passes neither 0 nor 1 newVar instance for this id instance
-1- 01b passes newVar 0 
-2- 10b passes newVar 1
-3- 11b passes newVar 0 and 1
-Accpetance condition level < newVariable. Otherwise unexpected behaviour
+    updateState
+    Calculates if this instantiation passes the closes.
+    Returns status. 
+    -1- delete. passes neither 0 nor 1 newVar instance for this id instance
+    1- 01b passes newVar 0 
+    2- 10b passes newVar 1
+    3- 11b passes newVar 0 and 1
+    Accpetance condition level < newVariable. Otherwise unexpected behaviour
 """
 def updateState(clauses, idValue, level, numVar, initStatus = 3):
        
@@ -162,27 +268,38 @@ def expandLevel(idCol,stateCol,newVariable):
         result.append(2**(newVariable-1)+idCol)
     return result
 
-
-def solveCNF(path="", startLevel=10):
-    
-    # 20 Vars - uf20-01.cnf # 4726 sol. 7714 nodes
-    # 50 Vars - uf50-05.cnf
+"""
+    solveCNF
+    Input path must containt solutions that correspond to the number of variables expanded = startLevel
+    orderVars passed object returns modified if reorderVars = True, and  orderVars is given empty
+"""
+def solveCNF(path="", startLevel=10, inputPath = "", reorderVars = False, orderVars = {}, freqSave = -1):
     
     if path == "":
         path = path
 
     expandids = udf(expandLevel, ArrayType(LongType()))
-
-    #graphDF = sc.parallelize([])
-    (numVar, numClauses, clauses) = parseNPFunction(path)     
+    (numVar, numClauses, clauses) = parseNPFunction(path)
     
-    initData = [i for i in range(0,2**(startLevel))]
+    if freqSave == -1:
+        freqSave = numVar
+    
+    if reorderVars:
+        #Modifies also orderVars. Dictionary
+        clauses = heuristicVarOrder(clauses, numVar, orderVars)
+     
+    
+    initData = []
+    if inputPath == "":
+        initData = [i for i in range(0,2**(startLevel))]
+    else:
+        initData = parseInput(inputPath)
+        
     initRDD = sc.parallelize(initData)
     initDF = initRDD.map(lambda x: Row(id=long(x), state=3))
-    
+        
     walkerDF = sqlContext.createDataFrame(initDF).cache()
-    #graphDF = walkerDF.select("id").withColumn("level",lit(startLevel))
-
+    
     for newVar in range(startLevel+1, numVar+1):
         if newVar == startLevel+1:
             reducedClause = minimClauseAllVars(clauses, newVar-1, onlynewVariables = False)
@@ -191,15 +308,30 @@ def solveCNF(path="", startLevel=10):
         
         #Parse state with clauses
         walkerDF = walkerDF.rdd.map(lambda row: Row(id=row['id'], state=updateState(clauses = reducedClause, idValue = row['id'], level = newVar-1, numVar = numVar))).toDF().where(col('state') != -1)
-        walkerDF = walkerDF.withColumn("id",explode(array(expandids(col("id"),col("state"),lit(newVar))))).withColumn("state",lit(3)).select(explode("id").alias("id"),"state")
-        #graphDF = graphDF.union(walkerDF.select("id").withColumn(lit(newVar)))
-        walkerDF.select("id").write.save("50output"+ str(newVar),format="csv")
+        walkerDF = walkerDF.withColumn("id",explode(array(expandids(col("id"),col("state"),lit(newVar))))).withColumn("state",lit(3)).select(explode("id").alias("id"),"state").cache()
+       
+        if newVar % freqSave == 0:
+            walkerDF.select("id").write.save(str(numVar)+"output"+ str(newVar),format="csv")
         
+    #return (walkerDF.select("id"), orderVars)
+    #TODO return orderVars or print
     return walkerDF.select("id")
-
 
 conf = SparkConf().setAppName("Boolean Solver")
 sc = SparkContext(conf=conf)
 sqlContext = SQLContext(sc)
-graphDF = solveCNF("uf50-05.cnf", 15).cache()
-print("Count: ",graphDF.count())
+# 20 Vars - uf20-01.cnf
+# 50 Vars - uf50-05.cnf
+# 75 Vars - uf75-04.cnf
+
+orderedVars = {}
+graphDF = solveCNF("uf50-05.cnf", 41, inputPath = "50output41", reorderVars = True, orderVars = orderedVars, freqSave = 1).cache()#, 15).cache()#36, "50output36").cache()
+
+numSolutions = graphDF.count()
+file = open("dictionary.txt","w")
+file.write("Variables:\n")
+file.write("Number solutions:" + numSolutions +"\n")
+file.write(json.dumps(orderedVars))
+file.close()
+    
+
