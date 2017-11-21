@@ -62,21 +62,26 @@ def parseNPFunction(path):
 def heuristicVarOrder(clauses, numVar, varDict={} ):
     
     if varDict == {}:
-        varsEntropy = []
+        varsInfoBits = []
         file = open("log.txt","w")
         file.write("\n clauses:" + str(clauses))
         for newVar in range(1,numVar+1):
-            entropyVar = estimateEntropy(clauses, newVar, numVar)
-            file.write("\n vars entropy: " + str(entropyVar))
+            quantInfoVar = estimateQuantInfo(clauses, newVar, numVar)
+            file.write("\n vars entropy: " + str(quantInfoVar))
             file.write("\n new var: " + str(newVar))
             file.write("\n num var: " + str(numVar))
-            varsEntropy.append((newVar, entropyVar))
-        varsEntropy = sorted(varsEntropy, key=lambda varTuple: varTuple[1], reverse=True)
+            varsInfoBits.append((newVar, quantInfoVar))
+        #We order descend, from the most restrictive variable to lowest, its expansion to 0 and 1 restricts most the problem
+        #Bigest quantity of iformation or uncertainty to lowest once you assign the variable measured to the value it restricts every clause
+        #We are concerned that when we expand the variable, it does not block any new assignment and size grows exponentially (x2),
+        #so we want the var to interact with most clauses meaningfully to increases the chances to block or delete new assignments and minimize its expanded data
+        #even at the expense of deleting clauses for the non restricting asignment branch. We value early deletion.
+        varsInfoBits = sorted(varsInfoBits, key=lambda varTuple: varTuple[1], reverse=True)
         
-        file.write("vars entropy:\n"+str(varsEntropy))
+        file.write("vars entropy:\n"+str(varsInfoBits))
         file.close()
         ind = 1
-        for (ordVar,_) in varsEntropy:
+        for (ordVar,_) in varsInfoBits:
             varDict[ordVar] = ind
             ind += 1
 
@@ -93,35 +98,45 @@ def heuristicVarOrder(clauses, numVar, varDict={} ):
     return renamedClauses
 
 """
-    estimateEntropy
-    Calculates the entropy estimate given a var and its clauses
+    estimateQuantInfo
+    Calculates the quantity of information in bits of the problem given an assigned varE and its clauses P(I|VarE)
+    VarE assumes the value in each clause that blocks it the most (impossibility both 1 and 0, but good to estimate if expand VarE)
+    Probability(rough estimate) find a solution is all clauses value false Prob(SolveProb) = Mul I€(1..numClause) ProbClauseIFalse
+    ProbClauseIFalse = 1 - ProbClauseIsTrue
+    ProbClauseIsTrue (assaigning vars randomly independently each var in each clause p=1/2 x var) = (1/2) ^ len(clause)
+    (treats all vars in a clause as different from other clauses)
+    Finally quantInfo = log2(1/Prob(SolvProb)) = -log2(Prob(SolvProb)) =  Sum I€(1..numClause) -log2(ProbClauseIFalse)
+
+    (every clause probability is calculated using a binary(0,1) random Variable prob(1/2) independent between clauses)
+    That is probability to find a solution with random assignment Entropy = Sum i€(1..numClasses) = log(1/probClassFalse) 
+
 """
-def estimateEntropy(clauses, varE, numVar):
-    #Probability all clauses values true (every clause random Variable is independend of each other close in this estimation)
-    entropy = 0.0#
+def estimateQuantInfo(clauses, varE, numVar):
+    
+    quantInfo = 0.0
     file = open("logE.txt","w")
     
     for clause in clauses:
         if varE in clause or (varE*-1) in clause:
             #Probability to make true the clause, is 1- prob(making clause false out of size clause random numbers 1 to numVar)
             #Probability match the clause
-            prob = (Decimal(1)/2) ** (len(clause)-1)
+            probClauseIsTrue = (Decimal(1)/2) ** (len(clause)-1)
             file.write("\n len clause:" + str(len(clause)))
             #Probability make clause true
-            prob = Decimal(1 - prob)
-            entropyClause = math.log(Decimal(1) / prob , 2)
-            entropy += entropyClause
-            file.write("\n entropy Acc:" + str(entropy))
+            probClauseIFalse = Decimal(1 - probClauseIsTrue)
+            quantInfoCl = -math.log(probClauseIFalse , 2)
+            quantInfo += quantInfoCl
+            file.write("\n entropy Acc:" + str(quantInfo))
         else:
-            prob = (Decimal(1)/2) ** (len(clause))
+            probClauseIsTrue = (Decimal(1)/2) ** (len(clause))
             file.write("\n len clause:" + str(len(clause)))
-            prob = Decimal(1 - prob)
-            entropyClause = math.log(Decimal(1) / prob , 2)
-            entropy += entropyClause
-            file.write("\n entropy Acc:" + str(entropy))
+            probClauseIFalse = Decimal(1 - probClauseIsTrue)
+            quantInfoCl = -math.log(probClauseIFalse , 2)
+            quantInfo += quantInfoCl
+            file.write("\n entropy Acc:" + str(quantInfo))
     file.close()
 
-    return entropy
+    return quantInfo
 
 
 """
@@ -166,15 +181,26 @@ def minimClause(clauses, level, newVariable, onlynewVariable = True):
     return minClauses
 
 """
+    varMinimClause
+    Select all the clauses that includes the var
+"""
+def varMinimClause(clauses, newVariable):  
+    minClauses = set()
+    newVars = set({newVariable,-newVariable})
+    for clause in clauses:
+        if newVars & clause != set():
+            minClauses.add(clause)
+    return minClauses
+"""
     minimClauseAllVars
     Reduces the number of clauses to the minimum relevant where clauses that will not be used
     are not included     
     @param clauses Array of sets. Each set is a clause of type (int, int int...)
     @param level . How many variable to check. From 1 to level variables
-    @param onlynewVariables. if True, adds non level variables
+    @param onlyNewVariables. if True, adds non level variables
     Requires level < newVariable.
 """
-def minimClauseAllVars(clauses, level, onlynewVariables = True):
+def minimClauseAllVars(clauses, level, onlyNewVariables = True):
     varsFilter = set(range(1,level+1))
     minClauses = set()
     for clause in clauses:
@@ -185,7 +211,7 @@ def minimClauseAllVars(clauses, level, onlynewVariables = True):
                 isMinimum = True
             else:
                 hasOneNew = True
-        if isMinimum and ((not onlynewVariables) or hasOneNew):
+        if isMinimum and ((not onlyNewVariables) or hasOneNew):
                 minClauses.add(frozenset(clause))
                
     return minClauses
@@ -216,7 +242,7 @@ def checkBoolean(clauses, instanceSet):
     3- 11b passes newVar 0 and 1
     Accpetance condition level < newVariable. Otherwise unexpected behaviour
 """
-def updateState(clauses, idValue, level, numVar, initStatus = 3):
+def updateState(clauses, idValue, level, numVar, initStatus = 3, onlyNewVariables = True):
        
     idSet = set()
     for i in range(0,level):
@@ -230,10 +256,16 @@ def updateState(clauses, idValue, level, numVar, initStatus = 3):
     #The rest of variables are used to check if it, the instance, can be eleminated. status = -1
     for newVariable in range(numVar,level,-1):
         status = initStatus
+        minimClauses = set()
+        if onlyNewVariables:
+            minimClauses = varMinimClause(clauses, newVariable)
+        else:
+            minimClauses = clauses
+        
         #Check if 0 for newVariable was passing. If status 1 or 3
         if status % 2 == 1:
             idSet.add(-newVariable)
-            passes0 = checkBoolean(clauses, instanceSet = idSet)
+            passes0 = checkBoolean(minimClauses, instanceSet = idSet)
             idSet.remove(-newVariable)
             if not passes0:
                 #newVariable at 0 does not pass. Status then 2 or 0
@@ -245,12 +277,13 @@ def updateState(clauses, idValue, level, numVar, initStatus = 3):
   
         #Check if 1 for newVariable was passing. Status 2 or 3
         if (status>>1) % 2 == 1:
-            idSet.add(newVariable)
-            passes1 = checkBoolean(clauses, instanceSet = idSet)
+            idSet.add(newVariable)            
+            passes1 = checkBoolean(minimClauses, instanceSet = idSet)
+            idSet.remove(newVariable)
             if not passes1:
                 #newVariable at 1 does not pass. Status then 1 or 0
                 status = status % 2
-            idSet.remove(newVariable)
+
         if status == 0:
             return -1
         else:
@@ -258,12 +291,17 @@ def updateState(clauses, idValue, level, numVar, initStatus = 3):
     
     return finalStatus
 
-
-def expandLevel(idCol,stateCol,newVariable):
+"""
+    expandLevel
+    Creates a list of all  expanded ids when adding the newVariable. Based on stateCol binary value
+    stateCol, if first bit = 1, says expand newVariable = 0- bit=0 not, segond bit = 1, says expand newVariable = 1 , bit=0 not.
+"""
+def expandLevel(idCol, stateCol, newVariable):
     result = []
     #We add newVar = 0
     if stateCol % 2 == 1:
         result.append(idCol)
+    #We add newVar = 1
     if (stateCol>>1) % 2 == 1:
         result.append(2**(newVariable-1)+idCol)
     return result
@@ -301,20 +339,22 @@ def solveCNF(path="", startLevel=10, inputPath = "", reorderVars = False, orderV
     walkerDF = sqlContext.createDataFrame(initDF).cache()
     
     for newVar in range(startLevel+1, numVar+1):
+        #We want to check the initial expanded variables clauses only once, at the begining. Latter need only to check the extended clauses.
+        onlyNewVariablesV = True
         if newVar == startLevel+1:
-            reducedClause = minimClauseAllVars(clauses, newVar-1, onlynewVariables = False)
-        else:
-            reducedClause = minimClauseAllVars(clauses, newVar-1)
-        
+            onlyNewVariablesV = False
+
+        reducedClause = minimClauseAllVars(clauses, newVar-1, onlyNewVariables = onlyNewVariablesV)       
         #Parse state with clauses
-        walkerDF = walkerDF.rdd.map(lambda row: Row(id=row['id'], state=updateState(clauses = reducedClause, idValue = row['id'], level = newVar-1, numVar = numVar))).toDF().where(col('state') != -1)
+        walkerDF = walkerDF.rdd.map(lambda row: Row(id=row['id'], state=updateState(clauses = reducedClause, idValue = row['id'], level = newVar-1, numVar = numVar, onlyNewVariables = onlyNewVariablesV))).toDF().where(col('state') != -1)
         walkerDF = walkerDF.withColumn("id",explode(array(expandids(col("id"),col("state"),lit(newVar))))).withColumn("state",lit(3)).select(explode("id").alias("id"),"state").cache()
        
         if newVar % freqSave == 0:
-            walkerDF.select("id").write.save(str(numVar)+"output"+ str(newVar),format="csv")
+            fileName = str(numVar)+"out"+ str(newVar)
+            if reorderVars:
+                fileName = fileName + "or"               
+            walkerDF.select("id").write.save(fileName,format="csv")
         
-    #return (walkerDF.select("id"), orderVars)
-    #TODO return orderVars or print
     return walkerDF.select("id")
 
 conf = SparkConf().setAppName("Boolean Solver")
@@ -322,15 +362,16 @@ sc = SparkContext(conf=conf)
 sqlContext = SQLContext(sc)
 # 20 Vars - uf20-01.cnf
 # 50 Vars - uf50-05.cnf
-# 75 Vars - uf75-04.cnf
+# 75 Vars - uf75-08.cnf Bug?
+# 75 Vars - flat75-11.cnf
 
 orderedVars = {}
-graphDF = solveCNF("uf50-05.cnf", 41, inputPath = "50output41", reorderVars = True, orderVars = orderedVars, freqSave = 1).cache()#, 15).cache()#36, "50output36").cache()
+graphDF = solveCNF("uf75-08.cnf", 24, inputPath = "75out24or", reorderVars = True, orderVars = orderedVars, freqSave = 1).cache()#, 15).cache()#36, "50output36").cache()
 
 numSolutions = graphDF.count()
 file = open("dictionary.txt","w")
 file.write("Variables:\n")
-file.write("Number solutions:" + numSolutions +"\n")
+file.write("Number solutions:" + str(numSolutions) +"\n")
 file.write(json.dumps(orderedVars))
 file.close()
     

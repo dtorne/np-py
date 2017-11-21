@@ -1,0 +1,55 @@
+The trending is more meory, no more cpu. paralellizing, faster, bigger mems.
+
+I propouse use big data the most restricting parts of hard-np p problems.
+
+Algorithms meant for map reduce if data is big. I use spark because (limit memory) or if.
+Or you can create custom cluster depending your needs.
+
+Usually a problem np hard, or is all np hard, or has an np-hard part.
+Propose this solution on big data to get solutions for all the np-hard parts of the problem.
+
+Resulsts show that in balanced np-hard the exponentiality grows tatata.
+All in memory. examples tatatata.
+
+If problem has a very loose part, better leave those variables at the end, and stop, because it could grow exponentially.
+
+Arguie that once solved the difficult part, with the solutions given, there are fast solvers for not so restricted problems.
+
+---
+Algo.
+
+
+Desc.
+
+Experimnt
+
+Code.
+
+Analtysis output
+
+Conclusion.
+
+---
+Introduction state art
+dll, heuristic,...
+
+state art memory.
+Israel, but not using big data. another approach for online learning.
+
+-----
+Code.
+
+Further
+explore stop points.
+better soring variables
+combine with better non restricted solvers.
+Use a non exploding option in parallel solvers for the open part.
+
+Note:
+Research the algorithm I did. And see if others experimented.
+----
+Conclusion. We are preocupied to look for cpu efficient algorithms, but it is time to proffit the new big data parallel tools.
+Regarding if NP = P
+Open question, with enough memory and parallelism, maybe np not p  limit in real world applicacions can be circumbent with the
+help of big data parallel architectures.
+Further improvement. Use(this for me) GPU? Matrix solver part?

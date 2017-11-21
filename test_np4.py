@@ -1,16 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Tue Nov 14 13:03:33 2017
+Created on Mon Nov 20 13:03:33 2017
 
 @author: david
 """
 
 from np1 import *
 import unittest
+import testbase
+
+ 
+def wordCount(rdd):
+    wcntRdd = rdd.flatMap(lambda line: line.split()).\
+        map(lambda word: (word, 1)).\
+        reduceByKey(lambda fa, fb: fa + fb)
+    return wcntRdd
+ 
+class TestWordCount(testbase.ReusedPySparkTestCase):
+    def test_word_count(self):
+        rdd = self.sc.parallelize(["a b c d", "a c d e", "a d e f"])
+        res = wordCount(rdd)
+        res = res.collectAsMap()
+        expected = {"a":3, "b":1, "c":2, "d":3, "e":2, "f":1}
+        self.assertEqual(res,expected)
 
 
-class TestBookMethods(unittest.TestCase):
+class TestMethods(unittest.TestCase):
 
     def setUp(self):
         self.path = "uf20-01.cnf"
@@ -98,4 +114,8 @@ class TestBookMethods(unittest.TestCase):
         # So status should be 01b which is 1
         status1 = np1.updateState(clauses, idValue=0, status=3, level=8, newVariable=9)
         self.assertTrue(status1==1)
-    
+
+
+if __name__ == '__main__':
+    if __name__ == '__main__':
+        unittest.main()

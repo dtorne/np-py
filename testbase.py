@@ -1,101 +1,64 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Nov 14 13:03:33 2017
-
-@author: david
-"""
-
-from np1 import *
+import os
+import sys
 import unittest
-
-
-class TestBookMethods(unittest.TestCase):
-
+ 
+ 
+from pyspark.conf import SparkConf
+from pyspark.context import SparkContext
+ 
+sc_values = {}
+ 
+class ReusedPySparkTestCase(unittest.TestCase):
+ 
+    @classmethod
+    def setUpClass(cls):
+        conf = SparkConf().setMaster("local[2]") \
+            .setAppName(cls.__name__) \
+        cls.sc = SparkContext(conf=conf)
+        sc_values[cls.__name__] = cls.sc
+ 
+    @classmethod
+    def tearDownClass(cls):
+        print "....calling stop tearDownClas, the content of sc_values=", sc_values
+        sc_values.clear()
+        cls.sc.stop()
+ 
+class PySparkTestCase(unittest.TestCase):
+ 
     def setUp(self):
-        self.path = "uf20-01.cnf"
-        (self.numVar, self.numClauses, self.clauses) = parseNPFunction(path = self.path)
-
-       
-    def test_read_file(self):
-        
-        # Test parses the 0 and reads clauses and variables
-        test = self.clauses.pop()
-        self.assertTrue(len(test.intersection(set([0]))) == 0)
-        clauses.add(test)
-        self.assertTrue(self.numClauses > self.numVar)
-        
-    def test_min_clause(self):
-        
-        currentLevel = 18    
-        minClauses = np1.minimClause(self.clauses, currentLevel, self.newVar)
-        #Includes the newVar in all clauses
-        hasNewVariables = True
-        #Has newVar positive clauses
-        hasPosSign = False
-        #Has newVar negative clauses
-        hasNegSign = False
-        for clause in minClauses:
-            if newVar not in clause and -newVar not in clause:
-                hasNewVariables = False
-            if newVar in clause:
-                hasPosSign = True
-            elif -newVar in clause:
-                hasNegSign = True
-                
-        self.assertTrue(hasNewVariables)
-        self.assertTrue(hasPosSign and hasNegSign)
-        
-        minClauses = np1.minimClause(clauses, currentLevel, self.newVar, False)
-        for clause in minClauses:
-            if newVar not in clause and -newVar not in clause:
-                hasNewVariables = False
-            if newVar in clause:
-                hasPosSign = True
-            elif -newVar in clause:
-                hasNegSign = True
-                
-        self.assertTrue(not hasNewVariables)
-        self.assertTrue(hasPosSign and hasNegSign)
-
-        minClause = np1.minimClause(clauses,level=8,newVariable=9)
-
-    def test_checkBoolean(self):
-        currentLevel = 18    
-        minClauses = np1.minimClause(self.clauses, currentLevel, self.newVar)
-        #Based on minClause = 
-        #{frozenset({9, -5, -1}),
-        # frozenset({-8, 4, 7}), 
-        #frozenset({9, 6, 1}),
-        # frozenset({-8, 4, -9}),
-        # frozenset({1, -5, -9})}
-
-        instanceSet = {9,-5,-1}
-        passes = checkBoolean(self.clauses, instanceSet)
-        self.assertTrue(not passes)
-
-        instanceSet = {1,5,-9}
-        passes = checkBoolean(self.clauses, instanceSet)
-        self.assertTrue(passes)
-    
-    def test_update_state(self):
-        currentLevel = 18    
-        minClauses = np1.minimClause(self.clauses, currentLevel, self.newVar)
-        
-        #Based on minClause = 
-        #{frozenset({9, -5, -1}),
-        # frozenset({-8, 4, 7}), 
-        #frozenset({9, 6, 1}),
-        # frozenset({-8, 4, -9}),
-        # frozenset({1, -5, -9})}
-        #Value 100000001 only var1 at 1 and newVar=9 positive is not blocked by any
-        #Value 000000001 all negative included newVar=-9 is blocked by {1, -5, -9}
-        # So status should be 10b which is 2
-        status2 = np1.updateState(clauses, idValue=1, status=3, level=8, newVariable=9)
-        self.assertTrue(status2==2)
-        #Value 100000000 only newVar=9 positive is blocked by {9, -5, -1}
-        #Value 000000000 all negative included newVar=-9 is not blocked by any
-        # So status should be 01b which is 1
-        status1 = np1.updateState(clauses, idValue=0, status=3, level=8, newVariable=9)
-        self.assertTrue(status1==1)
-    
+        self._old_sys_path = list(sys.path)
+        conf = SparkConf().setMaster("local[2]") \
+            .setAppName(self.__class__.__name__) \
+        self.sc = SparkContext(conf=conf)
+ 
+    def tearDown(self):
+        self.sc.stop()
+        sys.path = self._old_sys_path
+ 
+class TestResusedScA(ReusedPySparkTestCase):
+ 
+    def testA_1(self):
+        rdd = self.sc.parallelize([1,2,3])
+        self.assertEqual(rdd.collect(), [1,2,3])
+        sc_values['testA_1'] = self.sc
+ 
+    def testA_2(self):
+        sc_values['testA_2'] = self.sc
+ 
+        self.assertEquals(self.sc, sc_values['testA_1'])
+ 
+ 
+class TestResusedScB(ReusedPySparkTestCase):
+    def testB_1(self):
+        sc_values['testB_1'] = self.sc
+ 
+    def testB_2(self):
+        sc_values['testB_2'] = self.sc
+ 
+    def testB_3(self):
+        sc_values['testB_3'] = self.sc
+        self.assertEquals(self.sc, sc_values['testB_2'])
+ 
+ 
+if __name__ == '__main__':
+    unittest.main()

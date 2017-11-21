@@ -9,29 +9,39 @@ Created on Tue Nov 14 13:03:33 2017
 from pyspark.sql import Row
 from pyspark.sql.types import IntegerType, ArrayType
 from pyspark.sql.functions import array, explode, lit, col, udf
+from pyspark.sql import *
 
 
+import sys
+
+from pyspark import SparkContext, SparkConf
 
 
 class NPCMemSolver:
     
-    """ 
+    """
         Initializes NPCMemSolver with path and the number of variables to expand first fully
     """
-    def __init__(self, path, initLevel = 10):
+    def __init__(self, path, sc, sqlContext, initLevel = 10):
+        #conf = SparkConf().setAppName(appName).setMaster(master)
+        #sc = SparkContext(conf=conf)
+
         self._path_ = path
         self._startLevel_ = initLevel
         self._graphDF_ = sc.parallelize([])
+        self.sc = sc
+        self.sqlContext = sqlContext
+        self.expand_ids = udf(self.expandLevel, ArrayType(IntegerType()))
 
 
-    def getStartLevel():
+    def getStartLevel(self):
         return self._startLevel_
     
-    def getGraphDF():
+    def getGraphDF(self):
         return self._graphDF_
     
     
-    def parseNPFunction(path):
+    def parseNPFunction(self, path):
         import re
         pattern = re.compile("[-]?\\d")
         
@@ -67,7 +77,7 @@ class NPCMemSolver:
       @param newVariable. the new variable whose valid clause add to the existing
       Requires level < newVariable.
     """
-    def minimClause(clauses, level, newVariable, onlyNewVariable=True):
+    def minimClause(self, clauses, level, newVariable, onlyNewVariable=True):
         varsFilter = set(range(1,level+1))
         varsFilter.add(newVariable)
         minClauses = set()
@@ -95,7 +105,7 @@ class NPCMemSolver:
     3- 11b passes newvar 0 and 1
     Accpetance condition level < newVariable. Otherwise unexpected behaviour
     """
-    def updateStatus(clauses, idValue, status, level, newVariable):
+    def updateState(self, clauses, idValue, status, level, newVariable):
         #Returns True if exist solution, False otherwise
         def checkBoolean(clauses, instanceSet):
             for clause in clauses:
@@ -134,7 +144,7 @@ class NPCMemSolver:
         return status
     
 
-    def expandLevel(idCol,stateCol,newVariable):
+    def expandLevel(self, idCol,stateCol,newVariable):
         result = []
         #We add newVar = 0
         if stateCol % 2 == 1:
@@ -144,36 +154,36 @@ class NPCMemSolver:
         return result
     
     
-    def solveCNF():
+    def solveCNF(self, path=""):
         
         # 20 Vars - uf20-01.cnf # 4726 sol. 7714 nodes
         # 50 Vars - uf50-05.cnf
-
-        (numVar, numClauses, clauses) = parseNPFunction(path="")
         
         if path == "":
             path = self._path_
+      
+        (numVar, numClauses, clauses) = self.parseNPFunction(path)     
         
-        startLevel = getStartLevel()
+        startLevel = self.getStartLevel()
         initData = [i for i in range(0,2**(startLevel-1))]
-        initRDD = sc.parallelize(initData)
+        initRDD = self.sc.parallelize(initData)
         initDF = initRDD.map(lambda x: Row(id=int(x), level=startLevel))
         
-        graphDF = sqlContext.createDataFrame(initDF)
+        graphDF = self.sqlContext.createDataFrame(initDF)
+
         
-        expand_ids = udf(expandLevel, ArrayType(IntegerType()))
         
         for new_var in range(startLevel+1, numVar+1):
             walkerDF = graphDF.select("id").filter(col("level") == startLevel).withColumn("state",lit(3))
             
             for walk_level in range(startLevel, new_var):
                 if new_var == startLevel+1:
-                    reducedClause = minimClause(clauses, walk_level, new_var,onlyNewVariable=False)
+                    reducedClause = self.minimClause(clauses, walk_level, new_var,onlyNewVariable=False)
                 else:
-                    reducedClause = minimClause(clauses, walk_level, new_var)
+                    reducedClause = self.minimClause(clauses, walk_level, new_var)
             
                 #Parse state with clauses
-                walkerDF = walkerDF.rdd.map(lambda row: Row(id=row['id'], state=updateStatus(reducedClause, row['id'], row['state'], walk_level, new_var))).toDF()
+                walkerDF = walkerDF.rdd.map(lambda row: Row(id=row['id'], state=self.updateState(reducedClause, row['id'], row['state'], walk_level, new_var))).toDF()
                 #Creates hash = id mod 2^level in graphDF to delete all branches of a no solution
                 graphDF = graphDF.select("*").withColumn("hashID", graphDF['id']%(2**walk_level))
                 #joins graphDF with updted status walkerDF and deletes all non solutions at this level, with new variable (marked by state=-1)
@@ -184,8 +194,14 @@ class NPCMemSolver:
                 #Leaf of tree/graph
                 else:
                     #Expand new level with the new Variable
-                    newLevelDF = walkerDF.withColumn("id",explode(array(expand_ids(col("id"),col("state"),lit(new_var))))).withColumn("level",lit(new_var)).select(explode("id").alias("id"),"level")
+                    newLevelDF = walkerDF.withColumn("id",explode(array(self.expand_ids(col("id"),col("state"),lit(new_var))))).withColumn("level",lit(new_var)).select(explode("id").alias("id"),"level")
                     graphDF = graphDF.select("id","level").union(newLevelDF).cache()
         
         self._graphDF_ = graphDF
-    
+
+if __name__ == "__main__":
+    conf = SparkConf().setAppName("Boolean Solver")
+    sc = SparkContext(conf=conf)
+    sqlContext = SQLContext(sc)
+    solver = NPCMemSolver("uf20-01.cnf", sc, sqlContext)
+    solver.solveCNF()
